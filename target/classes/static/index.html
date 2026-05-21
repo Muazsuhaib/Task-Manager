@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Task Manager</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; font-size: 14px; background: #f5f5f5; color: #222; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 24px; }
+    h2 { font-size: 15px; margin-bottom: 12px; border-bottom: 1px solid #ccc; padding-bottom: 6px; }
+    section { background: #fff; border: 1px solid #ddd; padding: 16px; margin-bottom: 20px; }
+    label { display: block; margin-bottom: 4px; font-weight: bold; }
+    input, textarea, select { width: 100%; padding: 6px 8px; border: 1px solid #bbb; margin-bottom: 10px; font-family: monospace; font-size: 13px; }
+    textarea { height: 60px; resize: vertical; }
+    button { padding: 7px 16px; cursor: pointer; font-family: monospace; font-size: 13px; border: 1px solid #888; background: #eee; }
+    button:hover { background: #ddd; }
+    button.primary { background: #333; color: #fff; border-color: #333; }
+    button.primary:hover { background: #555; }
+    button.danger { background: #a00; color: #fff; border-color: #a00; }
+    button.danger:hover { background: #c00; }
+    #status-msg { margin-top: 10px; padding: 8px; font-size: 13px; display: none; }
+    #status-msg.ok  { background: #d4edda; border: 1px solid #28a745; color: #155724; }
+    #status-msg.err { background: #f8d7da; border: 1px solid #dc3545; color: #721c24; }
+    #suggest-result { margin-top: 10px; padding: 8px; background: #fffbe6; border: 1px solid #f0c040; display: none; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #ccc; background: #f0f0f0; }
+    td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+    tr:hover td { background: #fafafa; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: bold; letter-spacing: 0.5px; }
+    .LOW    { background: #d4edda; color: #155724; }
+    .MEDIUM { background: #fff3cd; color: #856404; }
+    .HIGH   { background: #f8d7da; color: #721c24; }
+    .TODO       { background: #e2e3e5; color: #383d41; }
+    .IN_PROGRESS{ background: #cce5ff; color: #004085; }
+    .DONE       { background: #d4edda; color: #155724; }
+    #task-list-empty { padding: 12px; color: #888; font-style: italic; }
+    .row-actions button { padding: 4px 10px; font-size: 12px; margin-left: 4px; }
+    .form-row { display: flex; gap: 12px; }
+    .form-row > div { flex: 1; }
+    #h2-link { font-size: 12px; color: #888; margin-top: -16px; margin-bottom: 20px; }
+    #h2-link a { color: #666; }
+  </style>
+</head>
+<body>
+<h1>📋 Task Manager</h1>
+<p id="h2-link">Database inspector: <a href="/h2-console" target="_blank">/h2-console</a>
+  (JDBC URL: <code>jdbc:h2:mem:taskdb</code>, user: <code>sa</code>, password: blank)</p>
+<section>
+  <h2>✨ AI Suggest</h2>
+  <p style="margin-bottom:10px;color:#555;">Describe a task in plain English — Claude will parse it into a structured task and pre-fill the form below.</p>
+  <label for="suggest-input">Plain-language description</label>
+  <input type="text" id="suggest-input" placeholder='e.g. "remind me to submit the quarterly report before Friday"' />
+  <button class="primary" onclick="suggestTask()">Suggest</button>
+  <div id="suggest-result"></div>
+</section>
+<section>
+  <h2 id="form-title">➕ Create Task</h2>
+  <input type="hidden" id="edit-id" />
+  <label for="title">Title <span style="color:red">*</span></label>
+  <input type="text" id="title" placeholder="Task title" />
+  <label for="description">Description</label>
+  <textarea id="description" placeholder="Optional details"></textarea>
+  <div class="form-row">
+    <div>
+      <label for="dueDate">Due Date</label>
+      <input type="date" id="dueDate" />
+    </div>
+    <div>
+      <label for="priority">Priority</label>
+      <select id="priority">
+        <option value="LOW">LOW</option>
+        <option value="MEDIUM" selected>MEDIUM</option>
+        <option value="HIGH">HIGH</option>
+      </select>
+    </div>
+    <div>
+      <label for="status">Status</label>
+      <select id="status">
+        <option value="TODO" selected>TODO</option>
+        <option value="IN_PROGRESS">IN_PROGRESS</option>
+        <option value="DONE">DONE</option>
+      </select>
+    </div>
+  </div>
+  <button class="primary" onclick="submitForm()">Save Task</button>
+  <button id="cancel-edit-btn" style="display:none;margin-left:8px" onclick="cancelEdit()">Cancel</button>
+  <div id="status-msg"></div>
+</section>
+<section>
+  <h2>📂 All Tasks <button onclick="loadTasks()" style="font-size:12px;padding:3px 10px;margin-left:10px">Refresh</button></h2>
+  <div id="task-list-empty" style="display:none">No tasks yet — create one above.</div>
+  <table id="task-table" style="display:none">
+    <thead>
+      <tr><th>ID</th><th>Title</th><th>Description</th><th>Due Date</th><th>Priority</th><th>Status</th><th>Actions</th></tr>
+    </thead>
+    <tbody id="task-tbody"></tbody>
+  </table>
+</section>
+<script>
+  const API = '/tasks';
+  function showStatus(msg, isError = false) {
+    const el = document.getElementById('status-msg');
+    el.textContent = msg;
+    el.className = isError ? 'err' : 'ok';
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 4000);
+  }
+  function badge(value, cssClass) { return `<span class="badge ${cssClass}">${value}</span>`; }
+  function formPayload() {
+    return {
+      title: document.getElementById('title').value.trim(),
+      description: document.getElementById('description').value.trim() || null,
+      dueDate: document.getElementById('dueDate').value || null,
+      priority: document.getElementById('priority').value,
+      status: document.getElementById('status').value,
+    };
+  }
+  function populateForm(task) {
+    document.getElementById('title').value = task.title || '';
+    document.getElementById('description').value = task.description || '';
+    document.getElementById('dueDate').value = task.dueDate || '';
+    document.getElementById('priority').value = task.priority || 'MEDIUM';
+    document.getElementById('status').value = task.status || 'TODO';
+  }
+  function resetForm() {
+    document.getElementById('edit-id').value = '';
+    document.getElementById('title').value = '';
+    document.getElementById('description').value = '';
+    document.getElementById('dueDate').value = '';
+    document.getElementById('priority').value = 'MEDIUM';
+    document.getElementById('status').value = 'TODO';
+    document.getElementById('form-title').textContent = '➕ Create Task';
+    document.getElementById('cancel-edit-btn').style.display = 'none';
+  }
+  function cancelEdit() { resetForm(); }
+  async function loadTasks() {
+    try {
+      const res = await fetch(API);
+      const tasks = await res.json();
+      const tbody = document.getElementById('task-tbody');
+      const empty = document.getElementById('task-list-empty');
+      const table = document.getElementById('task-table');
+      tbody.innerHTML = '';
+      if (!tasks.length) { empty.style.display = 'block'; table.style.display = 'none'; return; }
+      empty.style.display = 'none';
+      table.style.display = 'table';
+      tasks.forEach(task => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${task.id}</td><td><strong>${escHtml(task.title)}</strong></td><td>${escHtml(task.description || '—')}</td><td>${task.dueDate || '—'}</td><td>${badge(task.priority, task.priority)}</td><td>${badge(task.status, task.status)}</td><td class="row-actions"><button onclick="startEdit(${task.id})">Edit</button><button class="danger" onclick="deleteTask(${task.id})">Delete</button></td>`;
+        tbody.appendChild(tr);
+      });
+    } catch (e) { showStatus('Failed to load tasks: ' + e.message, true); }
+  }
+  async function submitForm() {
+    const editId = document.getElementById('edit-id').value;
+    const payload = formPayload();
+    if (!payload.title) { showStatus('Title is required.', true); return; }
+    const isEdit = !!editId;
+    const url = isEdit ? `${API}/${editId}` : API;
+    const method = isEdit ? 'PUT' : 'POST';
+    try {
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) { const err = await res.json().catch(() => ({ message: res.statusText })); showStatus('Error: ' + (err.message || res.statusText), true); return; }
+      showStatus(isEdit ? 'Task updated.' : 'Task created.');
+      resetForm();
+      loadTasks();
+    } catch (e) { showStatus('Request failed: ' + e.message, true); }
+  }
+  async function startEdit(id) {
+    try {
+      const res = await fetch(`${API}/${id}`);
+      const task = await res.json();
+      populateForm(task);
+      document.getElementById('edit-id').value = id;
+      document.getElementById('form-title').textContent = `✏️ Edit Task #${id}`;
+      document.getElementById('cancel-edit-btn').style.display = 'inline-block';
+      document.getElementById('title').focus();
+      document.querySelector('section:nth-of-type(2)').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) { showStatus('Failed to load task: ' + e.message, true); }
+  }
+  async function deleteTask(id) {
+    if (!confirm(`Delete task #${id}?`)) return;
+    try {
+      const res = await fetch(`${API}/${id}`, { method: 'DELETE' });
+      if (!res.ok) { const err = await res.json().catch(() => ({ message: res.statusText })); showStatus('Delete failed: ' + (err.message || res.statusText), true); return; }
+      showStatus(`Task #${id} deleted.`);
+      loadTasks();
+    } catch (e) { showStatus('Delete failed: ' + e.message, true); }
+  }
+  async function suggestTask() {
+    const input = document.getElementById('suggest-input').value.trim();
+    const resultEl = document.getElementById('suggest-result');
+    if (!input) { resultEl.textContent = 'Please enter a description first.'; resultEl.style.display = 'block'; return; }
+    resultEl.textContent = '⏳ Asking Claude…';
+    resultEl.style.display = 'block';
+    try {
+      const res = await fetch(`${API}/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: input }) });
+      if (!res.ok) { const err = await res.json().catch(() => ({ message: res.statusText })); resultEl.textContent = '⚠️ ' + (err.message || 'Suggest failed.'); return; }
+      const task = await res.json();
+      populateForm(task);
+      document.getElementById('edit-id').value = '';
+      document.getElementById('form-title').textContent = '➕ Create Task';
+      document.getElementById('cancel-edit-btn').style.display = 'none';
+      resultEl.innerHTML = `✅ Form pre-filled from Claude's suggestion. Review and click <strong>Save Task</strong> to create it.`;
+      document.querySelector('section:nth-of-type(2)').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) { resultEl.textContent = '⚠️ Request failed: ' + e.message; }
+  }
+  function escHtml(str) { return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  loadTasks();
+</script>
+</body>
+</html>
